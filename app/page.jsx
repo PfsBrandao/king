@@ -19,80 +19,33 @@ import {
 
 /**
  * ============================================================================
- * KING SCOREBOARD – V4.3
+ * KING SCOREBOARD – V4.4
  * ============================================================================
- * Inclui:
- * - Topo da tabela sempre visível (nomes + totais)
- * - Coluna "Rondas" fixa ao deslizar para os lados
- * - Bloquear edição (para evitar toques acidentais)
+ * FIXES:
+ * - "Vazas" não aparecia: garantia de espaço para o topo sticky (sem tapar 1ª ronda)
+ * - Input inválido não pode avançar nem virar 0
+ * - Cabeçalho (nomes + totais) sticky no scroll também em mobile (mesmo com scroll horizontal)
+ * Mantém:
+ * - Coluna "Rondas" fixa no scroll horizontal
+ * - Bloquear edição
  * - Aviso antes de sair com jogo a decorrer
- * - Histórico: ver detalhes, repetir jogadores, apagar 1 jogo
- * - Histórico: pesquisa + ordenar (data/vencedor)
- * - Progresso: "Rondas feitas X/10" + realce na próxima ronda
- * - Auto-avançar para o próximo campo (com pequena pausa)
- * - Confirmação antes de sortear
- * - Campos só aceitam números e limites mais claros
+ * - Histórico: detalhes, repetir jogadores, apagar 1 jogo
+ * - Histórico: pesquisa + ordenar
+ * - Progresso + destaque próxima ronda
+ * - Auto-avançar (apenas quando valor é válido)
  * ============================================================================
  */
 
 const STORAGE = {
-  scores: "king_v43_scores",
-  players: "king_v43_players",
-  festa: "king_v43_festa",
-  history: "king_v43_history",
-  dark: "king_v43_dark",
-  locked: "king_v43_locked",
+  scores: "king_v44_scores",
+  players: "king_v44_players",
+  festa: "king_v44_festa",
+  history: "king_v44_history",
+  dark: "king_v44_dark",
+  locked: "king_v44_locked",
 };
 
-const PlayerHeaderCell = ({
-  name,
-  total,
-  isDealer,
-  isDarkMode,
-  isLeader,
-  stickyTopClass,
-}) => (
-  <th
-    className={`sticky ${stickyTopClass} z-50 p-2 border-b-2 transition-all duration-300 ${
-      isDarkMode ? "border-slate-800 bg-slate-900" : "border-slate-200 bg-white"
-    } ${isDealer ? "bg-orange-500/10" : ""} ${
-      isLeader ? "ring-2 ring-emerald-500/70" : ""
-    }`}
-  >
-    <div className="flex flex-col items-center gap-1.5">
-      <div className="h-5">
-        {isDealer && (
-          <span className="bg-orange-600 text-white text-[7px] font-black px-2 py-0.5 rounded-full uppercase">
-            Dá cartas
-          </span>
-        )}
-      </div>
-
-      <span
-        className={`text-[11px] font-black uppercase break-words ${
-          isDarkMode ? "text-slate-100" : "text-slate-900"
-        }`}
-      >
-        {name}
-      </span>
-
-      <span
-        className={`text-sm font-black px-3 py-1 rounded-lg border transition-colors ${
-          isDarkMode
-            ? "bg-slate-800 border-slate-700 text-blue-400"
-            : "bg-white border-slate-200 text-blue-600"
-        }`}
-      >
-        {total > 0 ? "+" : ""}
-        {total}
-      </span>
-    </div>
-  </th>
-);
-
 export default function KingScoreboard() {
-  const navRef = useRef(null);
-
   const [players, setPlayers] = useState([
     "JOGADOR 1",
     "JOGADOR 2",
@@ -116,28 +69,23 @@ export default function KingScoreboard() {
   const [dealerIdx, setDealerIdx] = useState(0);
   const [showResetConfirm, setShowResetConfirm] = useState(false);
 
-  // Bloquear edição
   const [isLocked, setIsLocked] = useState(false);
 
-  // Mensagem rápida
   const [toast, setToast] = useState("");
-
-  // Erro por ronda
   const [rowError, setRowError] = useState({});
 
-  // Histórico: pesquisa e ordenação
   const [historyQuery, setHistoryQuery] = useState("");
   const [historySort, setHistorySort] = useState("date_desc"); // date_desc | date_asc | winner_desc | winner_asc
+  const [historyDetail, setHistoryDetail] = useState(null);
 
-  // Histórico: detalhes
-  const [historyDetail, setHistoryDetail] = useState(null); // item
+  // Auto-avançar: refs + timers
+  const inputRefs = useRef({});
+  const advanceTimers = useRef({});
 
-  // Auto-avançar: refs para inputs
-  const inputRefs = useRef({}); // key: `${rid}_${pIdx}` -> element
-  const advanceTimers = useRef({}); // key -> timeout id
-
-  // Altura fixa do topo (nav é h-16)
-  const stickyTopClass = "top-16";
+  // IMPORTANTE: sticky em mobile é mais estável com table border-separate.
+  // E precisamos de garantir que o sticky do cabeçalho não tapa a 1ª linha.
+  // Solução: adicionar "padding-top" virtual antes do corpo (linha espaçadora).
+  const stickyTopClass = "top-16"; // nav h-16 (64px)
 
   const rounds = useMemo(
     () => [
@@ -145,7 +93,12 @@ export default function KingScoreboard() {
       { id: "copas", name: "Copas", max: 13, calc: (n) => n * -20 },
       { id: "damas", name: "Damas", max: 4, calc: (n) => n * -50 },
       { id: "reis", name: "Reis / Valetes", max: 8, calc: (n) => n * -30 },
-      { id: "rei_copas", name: "Rei de Copas", max: 1, calc: (n) => n * -160 },
+      {
+        id: "rei_copas",
+        name: "Rei de Copas",
+        max: 1,
+        calc: (n) => n * -160,
+      },
       { id: "ultimas", name: "Últimas Vaz.", max: 2, calc: (n) => n * -90 },
       {
         id: "f1",
@@ -175,7 +128,9 @@ export default function KingScoreboard() {
     []
   );
 
-  // Carregar dados guardados
+  // -----------------------
+  // Load / Save
+  // -----------------------
   useEffect(() => {
     const sScores = localStorage.getItem(STORAGE.scores);
     const sPlayers = localStorage.getItem(STORAGE.players);
@@ -198,7 +153,6 @@ export default function KingScoreboard() {
     if (sLocked === "true") setIsLocked(true);
   }, [rounds]);
 
-  // Guardar dados
   useEffect(() => {
     if (Object.keys(scores).length === 0) return;
 
@@ -212,6 +166,9 @@ export default function KingScoreboard() {
     document.body.style.backgroundColor = isDarkMode ? "#020617" : "#f8fafc";
   }, [scores, players, festaModes, history, isDarkMode, isLocked]);
 
+  // -----------------------
+  // Helpers UI
+  // -----------------------
   const showToast = (msg) => {
     setToast(msg);
     window.clearTimeout(showToast._t);
@@ -231,6 +188,9 @@ export default function KingScoreboard() {
     }, 2200);
   };
 
+  // -----------------------
+  // Game logic
+  // -----------------------
   const isRowFull = (rid) => {
     const row = scores[rid];
     if (!row) return false;
@@ -241,13 +201,12 @@ export default function KingScoreboard() {
 
   const completedRoundsCount = rounds.filter((r) => isRowFull(r.id)).length;
   const totalRoundsCount = rounds.length;
-
   const nextRound = rounds.find((r) => !isRowFull(r.id)) || null;
 
   useEffect(() => {
     if (!isGameActive) return;
     setDealerIdx(completedRoundsCount % 4);
-  }, [scores, isGameActive, completedRoundsCount]);
+  }, [isGameActive, completedRoundsCount]);
 
   const calculatePoints = (rid, pIdx, override = null) => {
     const round = rounds.find((r) => r.id === rid);
@@ -281,13 +240,94 @@ export default function KingScoreboard() {
     .filter((x) => x.t === maxTotal)
     .map((x) => x.i);
 
+  const gameFinished = isGameActive && rounds.every((r) => isRowFull(r.id));
+
+  // -----------------------
+  // Labels (Festa)
+  // -----------------------
+  const getFestaLabelFor = (playersArr, id) => {
+    switch (id) {
+      case "f1":
+        return `Festa ${playersArr[2]}`;
+      case "f2":
+        return `Festa ${playersArr[3]}`;
+      case "f3":
+        return `Festa ${playersArr[0]}`;
+      case "f4":
+        return `Festa ${playersArr[1]}`;
+      default:
+        return "Festa";
+    }
+  };
+
+  // -----------------------
+  // Inputs: validação + auto-avançar
+  // -----------------------
+  const isValidValueForRound = (round, valueInt, rid, pIdx) => {
+    if (round.type === "festa") {
+      return valueInt >= -15 && valueInt <= 25;
+    }
+
+    if (valueInt < 0 || valueInt > round.max) return false;
+
+    const row = scores[rid] || { p0: "", p1: "", p2: "", p3: "" };
+    const sumOthers = [0, 1, 2, 3]
+      .filter((i) => i !== pIdx)
+      .reduce((a, i) => a + (parseInt(row[`p${i}`], 10) || 0), 0);
+
+    return sumOthers + valueInt <= round.max;
+  };
+
+  const updateScore = (rid, pIdx, rawValue) => {
+    if (isLocked) {
+      showToast("Edição bloqueada.");
+      return { ok: false, reason: "locked" };
+    }
+
+    const round = rounds.find((r) => r.id === rid);
+    if (!round) return { ok: false, reason: "no_round" };
+
+    // Aceita vazio e "-" (não avança)
+    if (rawValue === "" || rawValue === "-") {
+      setScores((prev) => ({
+        ...prev,
+        [rid]: { ...prev[rid], [`p${pIdx}`]: rawValue },
+      }));
+      return { ok: true, canAdvance: false };
+    }
+
+    const cleaned = String(rawValue).trim();
+
+    // IMPORTANTE: usamos input type="text" (não "number") para evitar o browser “forçar” 0.
+    // Aceita só números (com - opcional no início)
+    if (!/^-?\d+$/.test(cleaned)) {
+      setRowErrorMsg(rid, "Só números aqui.");
+      return { ok: false, reason: "not_number" };
+    }
+
+    const val = parseInt(cleaned, 10);
+    if (Number.isNaN(val)) return { ok: false, reason: "nan" };
+
+    if (!isValidValueForRound(round, val, rid, pIdx)) {
+      if (round.type === "festa") setRowErrorMsg(rid, "Festa: só entre -15 e 25.");
+      else setRowErrorMsg(rid, "Valor inválido (limite/soma).");
+      return { ok: false, reason: "invalid_limits" };
+    }
+
+    setScores((prev) => ({
+      ...prev,
+      [rid]: { ...prev[rid], [`p${pIdx}`]: val },
+    }));
+
+    return { ok: true, canAdvance: true };
+  };
+
   const scheduleAdvance = (rid, pIdx) => {
     const key = `${rid}_${pIdx}`;
     window.clearTimeout(advanceTimers.current[key]);
 
-    // pequena pausa para deixar a pessoa terminar de digitar
+    // pausa para a pessoa terminar de digitar
     advanceTimers.current[key] = window.setTimeout(() => {
-      // Próximo jogador na mesma ronda; se for o último, vai para a próxima ronda
       const rIndex = rounds.findIndex((r) => r.id === rid);
       const nextP = pIdx < 3 ? pIdx + 1 : 0;
       const nextR =
@@ -300,68 +340,9 @@ export default function KingScoreboard() {
     }, 450);
   };
 
-  // Atualizar pontuação (agora retorna true/false)
-  const updateScore = (rid, pIdx, rawValue) => {
-    if (isLocked) {
-      showToast("Edição bloqueada.");
-      return false;
-    }
-
-    const round = rounds.find((r) => r.id === rid);
-    if (!round) return false;
-
-    if (rawValue === "" || rawValue === "-") {
-      setScores((prev) => ({
-        ...prev,
-        [rid]: { ...prev[rid], [`p${pIdx}`]: rawValue },
-      }));
-      return true;
-    }
-
-    const cleaned = String(rawValue).trim();
-    if (!/^-?\d+$/.test(cleaned)) {
-      setRowErrorMsg(rid, "Só números aqui.");
-      return false;
-    }
-
-    const val = parseInt(cleaned, 10);
-    if (Number.isNaN(val)) return false;
-
-    if (round.type === "festa") {
-      if (val < -15 || val > 25) {
-        setRowErrorMsg(rid, "Festa: só entre -15 e 25.");
-        return false;
-      }
-      setScores((prev) => ({
-        ...prev,
-        [rid]: { ...prev[rid], [`p${pIdx}`]: val },
-      }));
-      return true;
-    }
-
-    if (val < 0 || val > round.max) {
-      setRowErrorMsg(rid, `Esta ronda aceita 0 até ${round.max}.`);
-      return false;
-    }
-
-    const row = scores[rid] || { p0: "", p1: "", p2: "", p3: "" };
-    const sumOthers = [0, 1, 2, 3]
-      .filter((i) => i !== pIdx)
-      .reduce((a, i) => a + (parseInt(row[`p${i}`], 10) || 0), 0);
-
-    if (sumOthers + val > round.max) {
-      setRowErrorMsg(rid, "A soma passa o máximo desta ronda.");
-      return false;
-    }
-
-    setScores((prev) => ({
-      ...prev,
-      [rid]: { ...prev[rid], [`p${pIdx}`]: val },
-    }));
-
-    return true;
-  };
-
+  // -----------------------
+  // Buttons
+  // -----------------------
   const handleShuffle = () => {
     const ok = window.confirm("Quer mesmo sortear a ordem dos jogadores?");
     if (!ok) return;
@@ -396,7 +377,11 @@ export default function KingScoreboard() {
       name: p,
       score: rounds.reduce(
         (sum, r) =>
-          sum + calculatePoints(r.id, i, { scores: snapshotScores, festaModes: snapshotFesta }),
+          sum +
+          calculatePoints(r.id, i, {
+            scores: snapshotScores,
+            festaModes: snapshotFesta,
+          }),
         0
       ),
     }));
@@ -417,29 +402,14 @@ export default function KingScoreboard() {
     resetGame();
   };
 
-  const getFestaLabelFor = (playersArr, id) => {
-    switch (id) {
-      case "f1":
-        return `Festa ${playersArr[2]}`;
-      case "f2":
-        return `Festa ${playersArr[3]}`;
-      case "f3":
-        return `Festa ${playersArr[0]}`;
-      case "f4":
-        return `Festa ${playersArr[1]}`;
-      default:
-        return "Festa";
-    }
-  };
-
-  // Aviso antes de sair (jogo a decorrer)
+  // -----------------------
+  // Aviso antes de sair
+  // -----------------------
   useEffect(() => {
     const handler = (e) => {
       if (!isGameActive) return;
-
-      // Considera "jogo a decorrer" se ainda não terminou
-      const gameFinished = rounds.every((r) => isRowFull(r.id));
-      if (gameFinished) return;
+      const finished = rounds.every((r) => isRowFull(r.id));
+      if (finished) return;
 
       e.preventDefault();
       e.returnValue = "Tem um jogo a decorrer. Quer sair mesmo?";
@@ -450,29 +420,15 @@ export default function KingScoreboard() {
     return () => window.removeEventListener("beforeunload", handler);
   }, [isGameActive, scores, rounds]);
 
-  const deleteHistoryItem = (id) => {
-    const ok = window.confirm("Apagar este jogo do histórico?");
-    if (!ok) return;
-    setHistory((prev) => prev.filter((x) => x.id !== id));
-    showToast("Jogo apagado do histórico.");
-  };
-
-  const repeatHistoryPlayers = (item) => {
-    setPlayers(item.players);
-    setShowHistory(false);
-    setHistoryDetail(null);
-    showToast("Jogadores carregados.");
-  };
-
-  const winnerScoreOf = (item) => {
-    const mx = Math.max(...item.scores.map((s) => s.score));
-    return mx;
-  };
+  // -----------------------
+  // Histórico: filtro/ordenação
+  // -----------------------
+  const winnerScoreOf = (item) => Math.max(...item.scores.map((s) => s.score));
 
   const filteredHistory = useMemo(() => {
     const q = historyQuery.trim().toLowerCase();
-
     let arr = [...history];
+
     if (q) {
       arr = arr.filter((h) => {
         const inPlayers = (h.players || []).some((p) =>
@@ -498,15 +454,69 @@ export default function KingScoreboard() {
     return arr;
   }, [history, historyQuery, historySort]);
 
-  const gameFinished = isGameActive && rounds.every((r) => isRowFull(r.id));
+  const deleteHistoryItem = (id) => {
+    const ok = window.confirm("Apagar este jogo do histórico?");
+    if (!ok) return;
+    setHistory((prev) => prev.filter((x) => x.id !== id));
+    showToast("Jogo apagado do histórico.");
+  };
 
-  // Se o jogo acabou, sugerir bloquear (não força, só facilita)
-  useEffect(() => {
-    if (gameFinished && !isLocked) {
-      showToast("Jogo completo. Pode bloquear a edição.");
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [gameFinished]);
+  const repeatHistoryPlayers = (item) => {
+    setPlayers(item.players);
+    setShowHistory(false);
+    setHistoryDetail(null);
+    showToast("Jogadores carregados.");
+  };
+
+  // -----------------------
+  // Component: Header Cell
+  // -----------------------
+  const PlayerHeaderCell = ({
+    name,
+    total,
+    isDealer,
+    isLeader,
+    isDarkMode,
+  }) => (
+    <th
+      className={`sticky ${stickyTopClass} z-50 p-2 border-b-2 transition-all duration-300 ${
+        isDarkMode
+          ? "border-slate-800 bg-slate-900"
+          : "border-slate-200 bg-white"
+      } ${isDealer ? "bg-orange-500/10" : ""} ${
+        isLeader ? "ring-2 ring-emerald-500/70" : ""
+      }`}
+    >
+      <div className="flex flex-col items-center gap-1.5">
+        <div className="h-5">
+          {isDealer && (
+            <span className="bg-orange-600 text-white text-[7px] font-black px-2 py-0.5 rounded-full uppercase">
+              Dá cartas
+            </span>
+          )}
+        </div>
+
+        <span
+          className={`text-[11px] font-black uppercase break-words ${
+            isDarkMode ? "text-slate-100" : "text-slate-900"
+          }`}
+        >
+          {name}
+        </span>
+
+        <span
+          className={`text-sm font-black px-3 py-1 rounded-lg border transition-colors ${
+            isDarkMode
+              ? "bg-slate-800 border-slate-700 text-blue-400"
+              : "bg-white border-slate-200 text-blue-600"
+          }`}
+        >
+          {total > 0 ? "+" : ""}
+          {total}
+        </span>
+      </div>
+    </th>
+  );
 
   // =========================
   // ECRÃ INICIAL
@@ -607,340 +617,29 @@ export default function KingScoreboard() {
           </div>
         </div>
 
-        {/* HISTÓRICO (no ecrã inicial) */}
+        {/* HISTÓRICO */}
         {showHistory && (
-          <div className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-6 backdrop-blur-sm">
-            <div
-              className={`w-full max-w-2xl p-8 rounded-3xl max-h-[85vh] overflow-y-auto ${
-                isDarkMode
-                  ? "bg-slate-900 text-white"
-                  : "bg-white text-slate-900"
-              }`}
-            >
-              <div className="flex justify-between items-center mb-6 pb-4 border-b-2 border-slate-500/20">
-                <h3 className="font-black uppercase text-xl flex items-center gap-3">
-                  <Trophy className="text-yellow-500" size={24} /> Histórico
-                </h3>
-                <button
-                  onClick={() => {
-                    setShowHistory(false);
-                    setHistoryDetail(null);
-                  }}
-                  className={`px-5 py-2 rounded-xl font-black text-[10px] uppercase ${
-                    isDarkMode
-                      ? "bg-slate-800 hover:bg-slate-700"
-                      : "bg-slate-100 hover:bg-slate-200"
-                  }`}
-                >
-                  Fechar
-                </button>
-              </div>
-
-              {/* Pesquisa + Ordenação */}
-              <div className="flex flex-col sm:flex-row gap-3 mb-6">
-                <div
-                  className={`flex items-center gap-2 px-4 py-3 rounded-2xl border-2 flex-1 ${
-                    isDarkMode
-                      ? "bg-slate-800 border-slate-700"
-                      : "bg-slate-50 border-slate-200"
-                  }`}
-                >
-                  <Search size={16} className={isDarkMode ? "text-slate-300" : "text-slate-500"} />
-                  <input
-                    value={historyQuery}
-                    onChange={(e) => setHistoryQuery(e.target.value)}
-                    placeholder="Procurar por jogador..."
-                    className={`w-full bg-transparent outline-none font-black text-[12px] uppercase ${
-                      isDarkMode ? "text-white placeholder:text-slate-400" : "text-slate-900 placeholder:text-slate-400"
-                    }`}
-                  />
-                </div>
-
-                <select
-                  value={historySort}
-                  onChange={(e) => setHistorySort(e.target.value)}
-                  className={`px-4 py-3 rounded-2xl border-2 font-black text-[12px] uppercase outline-none ${
-                    isDarkMode
-                      ? "bg-slate-800 border-slate-700 text-white"
-                      : "bg-white border-slate-200 text-slate-900"
-                  }`}
-                >
-                  <option value="date_desc">Data (mais recente)</option>
-                  <option value="date_asc">Data (mais antiga)</option>
-                  <option value="winner_desc">Vencedor (maior)</option>
-                  <option value="winner_asc">Vencedor (menor)</option>
-                </select>
-              </div>
-
-              {/* LISTA */}
-              {!historyDetail && (
-                <div className="space-y-4">
-                  {filteredHistory.length === 0 && (
-                    <div
-                      className={`p-6 rounded-2xl border-2 text-center font-black uppercase text-[11px] ${
-                        isDarkMode
-                          ? "bg-slate-800 border-slate-700 text-slate-300"
-                          : "bg-slate-50 border-slate-200 text-slate-500"
-                      }`}
-                    >
-                      Sem resultados.
-                    </div>
-                  )}
-
-                  {filteredHistory.map((h) => (
-                    <div
-                      key={h.id}
-                      className={`p-5 border-2 rounded-2xl ${
-                        isDarkMode
-                          ? "bg-slate-800 border-slate-700"
-                          : "bg-slate-50 border-slate-200"
-                      }`}
-                    >
-                      <div className="flex items-start justify-between gap-3">
-                        <div>
-                          <div className="text-[10px] opacity-50 font-black uppercase tracking-wider">
-                            {h.date}
-                          </div>
-                          <div className="text-[11px] font-black uppercase mt-1 opacity-80">
-                            {h.players?.join(" • ")}
-                          </div>
-                        </div>
-
-                        <div className="flex gap-2">
-                          <button
-                            onClick={() => setHistoryDetail(h)}
-                            className={`px-4 py-2 rounded-xl font-black text-[10px] uppercase border-2 transition-all ${
-                              isDarkMode
-                                ? "bg-slate-900 border-slate-700 hover:bg-slate-700"
-                                : "bg-white border-slate-200 hover:bg-slate-100"
-                            }`}
-                            title="Ver detalhes deste jogo"
-                          >
-                            Detalhes
-                          </button>
-
-                          <button
-                            onClick={() => repeatHistoryPlayers(h)}
-                            className={`px-4 py-2 rounded-xl font-black text-[10px] uppercase border-2 transition-all flex items-center gap-2 ${
-                              isDarkMode
-                                ? "bg-slate-900 border-slate-700 hover:bg-slate-700"
-                                : "bg-white border-slate-200 hover:bg-slate-100"
-                            }`}
-                            title="Carregar os mesmos jogadores"
-                          >
-                            <RotateCw size={14} /> Repetir
-                          </button>
-
-                          <button
-                            onClick={() => deleteHistoryItem(h.id)}
-                            className="px-4 py-2 rounded-xl font-black text-[10px] uppercase bg-rose-500 text-white hover:bg-rose-600 transition-all flex items-center gap-2"
-                            title="Apagar este jogo do histórico"
-                          >
-                            <Trash2 size={14} /> Apagar
-                          </button>
-                        </div>
-                      </div>
-
-                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mt-4">
-                        {h.scores.map((s, idx) => (
-                          <div key={idx} className="flex flex-col">
-                            <span className="text-[10px] opacity-60 font-black uppercase mb-1">
-                              {s.name}
-                            </span>
-                            <span
-                              className={`text-2xl font-black ${
-                                s.score > 0
-                                  ? "text-emerald-500"
-                                  : s.score < 0
-                                  ? "text-rose-500"
-                                  : "opacity-40"
-                              }`}
-                            >
-                              {s.score > 0 ? "+" : ""}
-                              {s.score}
-                            </span>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-
-              {/* DETALHES */}
-              {historyDetail && (
-                <div>
-                  <div className="flex items-center justify-between mb-4">
-                    <div>
-                      <div className="text-[10px] opacity-50 font-black uppercase tracking-wider">
-                        {historyDetail.date}
-                      </div>
-                      <div className="text-[12px] font-black uppercase mt-1">
-                        Detalhes do jogo
-                      </div>
-                    </div>
-
-                    <div className="flex gap-2">
-                      <button
-                        onClick={() => repeatHistoryPlayers(historyDetail)}
-                        className={`px-4 py-2 rounded-xl font-black text-[10px] uppercase border-2 transition-all flex items-center gap-2 ${
-                          isDarkMode
-                            ? "bg-slate-800 border-slate-700 hover:bg-slate-700"
-                            : "bg-slate-100 border-slate-200 hover:bg-slate-200"
-                        }`}
-                        title="Carregar os mesmos jogadores"
-                      >
-                        <RotateCw size={14} /> Repetir
-                      </button>
-
-                      <button
-                        onClick={() => setHistoryDetail(null)}
-                        className={`px-4 py-2 rounded-xl font-black text-[10px] uppercase border-2 transition-all ${
-                          isDarkMode
-                            ? "bg-slate-800 border-slate-700 hover:bg-slate-700"
-                            : "bg-slate-100 border-slate-200 hover:bg-slate-200"
-                        }`}
-                      >
-                        Voltar
-                      </button>
-                    </div>
-                  </div>
-
-                  <div className="overflow-x-auto">
-                    <table className="w-full border-collapse table-fixed">
-                      <colgroup>
-                        <col style={{ width: "22%" }} />
-                        <col style={{ width: "19.5%" }} />
-                        <col style={{ width: "19.5%" }} />
-                        <col style={{ width: "19.5%" }} />
-                        <col style={{ width: "19.5%" }} />
-                      </colgroup>
-                      <thead>
-                        <tr>
-                          <th
-                            className={`p-3 text-left border-b-2 ${
-                              isDarkMode
-                                ? "border-slate-700 text-slate-200"
-                                : "border-slate-200 text-slate-700"
-                            }`}
-                          >
-                            Ronda
-                          </th>
-                          {historyDetail.players.map((p, i) => (
-                            <th
-                              key={i}
-                              className={`p-3 text-center border-b-2 font-black uppercase text-[11px] ${
-                                isDarkMode
-                                  ? "border-slate-700 text-white"
-                                  : "border-slate-200 text-slate-900"
-                              }`}
-                            >
-                              {p}
-                            </th>
-                          ))}
-                        </tr>
-                      </thead>
-                      <tbody
-                        className={`divide-y ${
-                          isDarkMode ? "divide-slate-800" : "divide-slate-200"
-                        }`}
-                      >
-                        {rounds.map((r) => {
-                          const label =
-                            r.type === "festa"
-                              ? getFestaLabelFor(historyDetail.players, r.id)
-                              : r.name;
-
-                          return (
-                            <tr key={r.id}>
-                              <td
-                                className={`p-3 font-black uppercase text-[11px] ${
-                                  isDarkMode ? "text-slate-200" : "text-slate-700"
-                                }`}
-                              >
-                                {label}
-                              </td>
-                              {[0, 1, 2, 3].map((pIdx) => {
-                                const val =
-                                  historyDetail.table?.[r.id]?.[`p${pIdx}`] ?? "";
-                                const pts = calculatePoints(r.id, pIdx, {
-                                  scores: historyDetail.table,
-                                  festaModes: historyDetail.festaModes,
-                                });
-
-                                return (
-                                  <td key={pIdx} className="p-3 text-center">
-                                    <div className="font-black text-lg">
-                                      {val === "" ? "—" : val}
-                                    </div>
-                                    <div
-                                      className={`text-[10px] font-black ${
-                                        pts > 0
-                                          ? "text-emerald-500"
-                                          : pts < 0
-                                          ? "text-rose-500"
-                                          : "opacity-40"
-                                      }`}
-                                    >
-                                      {pts > 0 ? "+" : ""}
-                                      {pts}
-                                    </div>
-                                  </td>
-                                );
-                              })}
-                            </tr>
-                          );
-                        })}
-                      </tbody>
-                    </table>
-                  </div>
-
-                  <div className="mt-6 grid grid-cols-2 sm:grid-cols-4 gap-4">
-                    {historyDetail.scores.map((s, idx) => (
-                      <div
-                        key={idx}
-                        className={`p-4 rounded-2xl border-2 ${
-                          isDarkMode
-                            ? "bg-slate-800 border-slate-700"
-                            : "bg-slate-50 border-slate-200"
-                        }`}
-                      >
-                        <div className="text-[10px] opacity-60 font-black uppercase">
-                          {s.name}
-                        </div>
-                        <div
-                          className={`text-2xl font-black ${
-                            s.score > 0
-                              ? "text-emerald-500"
-                              : s.score < 0
-                              ? "text-rose-500"
-                              : "opacity-40"
-                          }`}
-                        >
-                          {s.score > 0 ? "+" : ""}
-                          {s.score}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-            </div>
-          </div>
+          <HistoryModal
+            isDarkMode={isDarkMode}
+            rounds={rounds}
+            players={players}
+            filteredHistory={filteredHistory}
+            historyDetail={historyDetail}
+            setHistoryDetail={setHistoryDetail}
+            setShowHistory={setShowHistory}
+            historyQuery={historyQuery}
+            setHistoryQuery={setHistoryQuery}
+            historySort={historySort}
+            setHistorySort={setHistorySort}
+            repeatHistoryPlayers={repeatHistoryPlayers}
+            deleteHistoryItem={deleteHistoryItem}
+            getFestaLabelFor={getFestaLabelFor}
+            calculatePoints={calculatePoints}
+          />
         )}
 
         {toast && (
-          <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-[999]">
-            <div
-              className={`px-5 py-3 rounded-2xl font-black text-[11px] uppercase shadow-2xl ${
-                isDarkMode
-                  ? "bg-slate-800 text-slate-100 border border-slate-700"
-                  : "bg-white text-slate-900 border border-slate-200"
-              }`}
-            >
-              {toast}
-            </div>
-          </div>
+          <Toast isDarkMode={isDarkMode} toast={toast} />
         )}
       </div>
     );
@@ -956,7 +655,6 @@ export default function KingScoreboard() {
       }`}
     >
       <nav
-        ref={navRef}
         className={`h-16 px-6 flex items-center justify-between border-b-2 sticky top-0 z-50 backdrop-blur-sm transition-colors ${
           isDarkMode
             ? "bg-slate-950/95 border-slate-900"
@@ -1087,9 +785,10 @@ export default function KingScoreboard() {
               : "bg-white border-slate-100 shadow-xl"
           }`}
         >
-          {/* Scroll horizontal */}
-          <div className="overflow-x-auto">
-            <table className="w-full border-collapse table-fixed">
+          {/* IMPORTANTE: overflow-x-auto pode quebrar sticky em alguns mobiles.
+              Mantemos overflow-x-auto mas garantimos overflow-y visível. */}
+          <div className="overflow-x-auto overflow-y-visible">
+            <table className="w-full table-fixed border-separate border-spacing-0">
               <colgroup>
                 <col style={{ width: "18%" }} />
                 <col style={{ width: "21.5%" }} />
@@ -1100,9 +799,9 @@ export default function KingScoreboard() {
 
               <thead>
                 <tr>
-                  {/* Cabeçalho da coluna "Rondas": fixa no topo e também à esquerda */}
+                  {/* Cabeçalho da coluna "Rondas": sticky topo + esquerda */}
                   <th
-                    className={`sticky left-0 ${stickyTopClass} z-[60] p-3 text-left border-r transition-colors ${
+                    className={`sticky left-0 ${stickyTopClass} z-[60] p-3 text-left border-b-2 border-r transition-colors ${
                       isDarkMode
                         ? "border-slate-800 bg-slate-900"
                         : "border-slate-200 bg-white"
@@ -1119,19 +818,27 @@ export default function KingScoreboard() {
                       name={p}
                       total={finalScore(i)}
                       isDealer={dealerIdx === i}
-                      isDarkMode={isDarkMode}
                       isLeader={leaderIdxs.includes(i)}
-                      stickyTopClass={stickyTopClass}
+                      isDarkMode={isDarkMode}
                     />
                   ))}
                 </tr>
               </thead>
 
               <tbody
-                className={`divide-y ${
+                className={`${
                   isDarkMode ? "divide-slate-800" : "divide-slate-100"
                 }`}
               >
+                {/* LINHA ESPAÇADORA: evita a sensação de “sumir” a 1ª ronda em alguns scrolls */}
+                <tr aria-hidden="true">
+                  <td className="h-2"></td>
+                  <td className="h-2"></td>
+                  <td className="h-2"></td>
+                  <td className="h-2"></td>
+                  <td className="h-2"></td>
+                </tr>
+
                 {rounds.map((round) => {
                   const done = isRowFull(round.id);
                   const sum = [0, 1, 2, 3].reduce(
@@ -1244,7 +951,6 @@ export default function KingScoreboard() {
                       {[0, 1, 2, 3].map((pIdx) => {
                         const pts = calculatePoints(round.id, pIdx);
                         const val = scores[round.id]?.[`p${pIdx}`] ?? "";
-                        const isFesta = round.type === "festa";
 
                         return (
                           <td
@@ -1259,13 +965,11 @@ export default function KingScoreboard() {
                                   if (!el) return;
                                   inputRefs.current[`${round.id}_${pIdx}`] = el;
                                 }}
-                                type="number"
-                                inputMode={isFesta ? "text" : "numeric"}
-                                step="1"
-                                min={isFesta ? -15 : 0}
-                                max={isFesta ? 25 : round.max}
+                                // IMPORTANTE: text para não “forçar” 0 em inválidos
+                                type="text"
+                                inputMode="numeric"
                                 disabled={isLocked}
-                                className={`w-full text-center py-4 rounded-xl font-black text-xl outline-none transition-all appearance-none ${
+                                className={`w-full text-center py-4 rounded-xl font-black text-xl outline-none transition-all ${
                                   isLocked ? "opacity-60" : ""
                                 } ${
                                   isDarkMode
@@ -1274,19 +978,30 @@ export default function KingScoreboard() {
                                 }`}
                                 value={val}
                                 onChange={(e) => {
-                                  const ok = updateScore(
+                                  const res = updateScore(
                                     round.id,
                                     pIdx,
                                     e.target.value
                                   );
-                                  if (ok && e.target.value !== "" && e.target.value !== "-") {
+
+                                  // Só avança se for válido E não vazio
+                                  if (res.ok && res.canAdvance) {
                                     scheduleAdvance(round.id, pIdx);
                                   }
                                 }}
                                 onKeyDown={(e) => {
                                   if (e.key === "Enter") {
                                     e.preventDefault();
-                                    scheduleAdvance(round.id, pIdx);
+                                    // Enter só avança se o valor atual for válido
+                                    const current = e.currentTarget.value;
+                                    const res = updateScore(
+                                      round.id,
+                                      pIdx,
+                                      current
+                                    );
+                                    if (res.ok && res.canAdvance) {
+                                      scheduleAdvance(round.id, pIdx);
+                                    }
                                   }
                                 }}
                                 placeholder="—"
@@ -1322,14 +1037,7 @@ export default function KingScoreboard() {
         {gameFinished && (
           <div className="mt-12">
             <button
-              onClick={() => {
-                if (isLocked) {
-                  // pode gravar mesmo bloqueado
-                  saveGameToHistory();
-                  return;
-                }
-                saveGameToHistory();
-              }}
+              onClick={saveGameToHistory}
               className="w-full bg-gradient-to-r from-emerald-500 to-emerald-600 text-white py-10 rounded-3xl font-black uppercase text-2xl shadow-xl flex items-center justify-center gap-4 active:scale-98 transition-all"
               title="Gravar jogo no histórico"
             >
@@ -1378,339 +1086,387 @@ export default function KingScoreboard() {
           </div>
         )}
 
-        {/* HISTÓRICO (durante o jogo também) */}
         {showHistory && (
-          <div className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-6 backdrop-blur-sm">
-            <div
-              className={`w-full max-w-2xl p-8 rounded-3xl max-h-[85vh] overflow-y-auto ${
+          <HistoryModal
+            isDarkMode={isDarkMode}
+            rounds={rounds}
+            players={players}
+            filteredHistory={filteredHistory}
+            historyDetail={historyDetail}
+            setHistoryDetail={setHistoryDetail}
+            setShowHistory={setShowHistory}
+            historyQuery={historyQuery}
+            setHistoryQuery={setHistoryQuery}
+            historySort={historySort}
+            setHistorySort={setHistorySort}
+            repeatHistoryPlayers={repeatHistoryPlayers}
+            deleteHistoryItem={deleteHistoryItem}
+            getFestaLabelFor={getFestaLabelFor}
+            calculatePoints={calculatePoints}
+          />
+        )}
+
+        {toast && <Toast isDarkMode={isDarkMode} toast={toast} />}
+      </main>
+    </div>
+  );
+}
+
+/* =========================
+   Pequenos componentes
+   ========================= */
+
+function Toast({ isDarkMode, toast }) {
+  return (
+    <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-[999]">
+      <div
+        className={`px-5 py-3 rounded-2xl font-black text-[11px] uppercase shadow-2xl ${
+          isDarkMode
+            ? "bg-slate-800 text-slate-100 border border-slate-700"
+            : "bg-white text-slate-900 border border-slate-200"
+        }`}
+      >
+        {toast}
+      </div>
+    </div>
+  );
+}
+
+function HistoryModal({
+  isDarkMode,
+  rounds,
+  players,
+  filteredHistory,
+  historyDetail,
+  setHistoryDetail,
+  setShowHistory,
+  historyQuery,
+  setHistoryQuery,
+  historySort,
+  setHistorySort,
+  repeatHistoryPlayers,
+  deleteHistoryItem,
+  getFestaLabelFor,
+  calculatePoints,
+}) {
+  return (
+    <div className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-6 backdrop-blur-sm">
+      <div
+        className={`w-full max-w-2xl p-8 rounded-3xl max-h-[85vh] overflow-y-auto ${
+          isDarkMode ? "bg-slate-900 text-white" : "bg-white text-slate-900"
+        }`}
+      >
+        <div className="flex justify-between items-center mb-6 pb-4 border-b-2 border-slate-500/20">
+          <h3 className="font-black uppercase text-xl flex items-center gap-3">
+            <Trophy className="text-yellow-500" size={24} /> Histórico
+          </h3>
+          <button
+            onClick={() => {
+              setShowHistory(false);
+              setHistoryDetail(null);
+            }}
+            className={`px-5 py-2 rounded-xl font-black text-[10px] uppercase ${
+              isDarkMode
+                ? "bg-slate-800 hover:bg-slate-700"
+                : "bg-slate-100 hover:bg-slate-200"
+            }`}
+          >
+            Fechar
+          </button>
+        </div>
+
+        <div className="flex flex-col sm:flex-row gap-3 mb-6">
+          <div
+            className={`flex items-center gap-2 px-4 py-3 rounded-2xl border-2 flex-1 ${
+              isDarkMode
+                ? "bg-slate-800 border-slate-700"
+                : "bg-slate-50 border-slate-200"
+            }`}
+          >
+            <Search
+              size={16}
+              className={isDarkMode ? "text-slate-300" : "text-slate-500"}
+            />
+            <input
+              value={historyQuery}
+              onChange={(e) => setHistoryQuery(e.target.value)}
+              placeholder="Procurar por jogador..."
+              className={`w-full bg-transparent outline-none font-black text-[12px] uppercase ${
                 isDarkMode
-                  ? "bg-slate-900 text-white"
-                  : "bg-white text-slate-900"
+                  ? "text-white placeholder:text-slate-400"
+                  : "text-slate-900 placeholder:text-slate-400"
               }`}
-            >
-              <div className="flex justify-between items-center mb-6 pb-4 border-b-2 border-slate-500/20">
-                <h3 className="font-black uppercase text-xl flex items-center gap-3">
-                  <Trophy className="text-yellow-500" size={24} /> Histórico
-                </h3>
-                <button
-                  onClick={() => {
-                    setShowHistory(false);
-                    setHistoryDetail(null);
-                  }}
-                  className={`px-5 py-2 rounded-xl font-black text-[10px] uppercase ${
-                    isDarkMode
-                      ? "bg-slate-800 hover:bg-slate-700"
-                      : "bg-slate-100 hover:bg-slate-200"
-                  }`}
-                >
-                  Fechar
-                </button>
+            />
+          </div>
+
+          <select
+            value={historySort}
+            onChange={(e) => setHistorySort(e.target.value)}
+            className={`px-4 py-3 rounded-2xl border-2 font-black text-[12px] uppercase outline-none ${
+              isDarkMode
+                ? "bg-slate-800 border-slate-700 text-white"
+                : "bg-white border-slate-200 text-slate-900"
+            }`}
+          >
+            <option value="date_desc">Data (mais recente)</option>
+            <option value="date_asc">Data (mais antiga)</option>
+            <option value="winner_desc">Vencedor (maior)</option>
+            <option value="winner_asc">Vencedor (menor)</option>
+          </select>
+        </div>
+
+        {!historyDetail && (
+          <div className="space-y-4">
+            {filteredHistory.length === 0 && (
+              <div
+                className={`p-6 rounded-2xl border-2 text-center font-black uppercase text-[11px] ${
+                  isDarkMode
+                    ? "bg-slate-800 border-slate-700 text-slate-300"
+                    : "bg-slate-50 border-slate-200 text-slate-500"
+                }`}
+              >
+                Sem resultados.
+              </div>
+            )}
+
+            {filteredHistory.map((h) => (
+              <div
+                key={h.id}
+                className={`p-5 border-2 rounded-2xl ${
+                  isDarkMode
+                    ? "bg-slate-800 border-slate-700"
+                    : "bg-slate-50 border-slate-200"
+                }`}
+              >
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <div className="text-[10px] opacity-50 font-black uppercase tracking-wider">
+                      {h.date}
+                    </div>
+                    <div className="text-[11px] font-black uppercase mt-1 opacity-80">
+                      {h.players?.join(" • ")}
+                    </div>
+                  </div>
+
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => setHistoryDetail(h)}
+                      className={`px-4 py-2 rounded-xl font-black text-[10px] uppercase border-2 transition-all ${
+                        isDarkMode
+                          ? "bg-slate-900 border-slate-700 hover:bg-slate-700"
+                          : "bg-white border-slate-200 hover:bg-slate-100"
+                      }`}
+                      title="Ver detalhes deste jogo"
+                    >
+                      Detalhes
+                    </button>
+
+                    <button
+                      onClick={() => repeatHistoryPlayers(h)}
+                      className={`px-4 py-2 rounded-xl font-black text-[10px] uppercase border-2 transition-all flex items-center gap-2 ${
+                        isDarkMode
+                          ? "bg-slate-900 border-slate-700 hover:bg-slate-700"
+                          : "bg-white border-slate-200 hover:bg-slate-100"
+                      }`}
+                      title="Carregar os mesmos jogadores"
+                    >
+                      <RotateCw size={14} /> Repetir
+                    </button>
+
+                    <button
+                      onClick={() => deleteHistoryItem(h.id)}
+                      className="px-4 py-2 rounded-xl font-black text-[10px] uppercase bg-rose-500 text-white hover:bg-rose-600 transition-all flex items-center gap-2"
+                      title="Apagar este jogo do histórico"
+                    >
+                      <Trash2 size={14} /> Apagar
+                    </button>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mt-4">
+                  {h.scores.map((s, idx) => (
+                    <div key={idx} className="flex flex-col">
+                      <span className="text-[10px] opacity-60 font-black uppercase mb-1">
+                        {s.name}
+                      </span>
+                      <span
+                        className={`text-2xl font-black ${
+                          s.score > 0
+                            ? "text-emerald-500"
+                            : s.score < 0
+                            ? "text-rose-500"
+                            : "opacity-40"
+                        }`}
+                      >
+                        {s.score > 0 ? "+" : ""}
+                        {s.score}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {historyDetail && (
+          <div>
+            <div className="flex items-center justify-between mb-4">
+              <div>
+                <div className="text-[10px] opacity-50 font-black uppercase tracking-wider">
+                  {historyDetail.date}
+                </div>
+                <div className="text-[12px] font-black uppercase mt-1">
+                  Detalhes do jogo
+                </div>
               </div>
 
-              <div className="flex flex-col sm:flex-row gap-3 mb-6">
+              <div className="flex gap-2">
+                <button
+                  onClick={() => repeatHistoryPlayers(historyDetail)}
+                  className={`px-4 py-2 rounded-xl font-black text-[10px] uppercase border-2 transition-all flex items-center gap-2 ${
+                    isDarkMode
+                      ? "bg-slate-800 border-slate-700 hover:bg-slate-700"
+                      : "bg-slate-100 border-slate-200 hover:bg-slate-200"
+                  }`}
+                  title="Carregar os mesmos jogadores"
+                >
+                  <RotateCw size={14} /> Repetir
+                </button>
+
+                <button
+                  onClick={() => setHistoryDetail(null)}
+                  className={`px-4 py-2 rounded-xl font-black text-[10px] uppercase border-2 transition-all ${
+                    isDarkMode
+                      ? "bg-slate-800 border-slate-700 hover:bg-slate-700"
+                      : "bg-slate-100 border-slate-200 hover:bg-slate-200"
+                  }`}
+                >
+                  Voltar
+                </button>
+              </div>
+            </div>
+
+            <div className="overflow-x-auto">
+              <table className="w-full table-fixed border-separate border-spacing-0">
+                <colgroup>
+                  <col style={{ width: "22%" }} />
+                  <col style={{ width: "19.5%" }} />
+                  <col style={{ width: "19.5%" }} />
+                  <col style={{ width: "19.5%" }} />
+                  <col style={{ width: "19.5%" }} />
+                </colgroup>
+                <thead>
+                  <tr>
+                    <th
+                      className={`p-3 text-left border-b-2 ${
+                        isDarkMode
+                          ? "border-slate-700 text-slate-200"
+                          : "border-slate-200 text-slate-700"
+                      }`}
+                    >
+                      Ronda
+                    </th>
+                    {historyDetail.players.map((p, i) => (
+                      <th
+                        key={i}
+                        className={`p-3 text-center border-b-2 font-black uppercase text-[11px] ${
+                          isDarkMode
+                            ? "border-slate-700 text-white"
+                            : "border-slate-200 text-slate-900"
+                        }`}
+                      >
+                        {p}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody
+                  className={`${
+                    isDarkMode ? "divide-slate-800" : "divide-slate-200"
+                  }`}
+                >
+                  {rounds.map((r) => {
+                    const label =
+                      r.type === "festa"
+                        ? getFestaLabelFor(historyDetail.players, r.id)
+                        : r.name;
+
+                    return (
+                      <tr key={r.id}>
+                        <td
+                          className={`p-3 font-black uppercase text-[11px] ${
+                            isDarkMode ? "text-slate-200" : "text-slate-700"
+                          }`}
+                        >
+                          {label}
+                        </td>
+                        {[0, 1, 2, 3].map((pIdx) => {
+                          const val =
+                            historyDetail.table?.[r.id]?.[`p${pIdx}`] ?? "";
+                          const pts = calculatePoints(r.id, pIdx, {
+                            scores: historyDetail.table,
+                            festaModes: historyDetail.festaModes,
+                          });
+
+                          return (
+                            <td key={pIdx} className="p-3 text-center">
+                              <div className="font-black text-lg">
+                                {val === "" ? "—" : val}
+                              </div>
+                              <div
+                                className={`text-[10px] font-black ${
+                                  pts > 0
+                                    ? "text-emerald-500"
+                                    : pts < 0
+                                    ? "text-rose-500"
+                                    : "opacity-40"
+                                }`}
+                              >
+                                {pts > 0 ? "+" : ""}
+                                {pts}
+                              </div>
+                            </td>
+                          );
+                        })}
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+
+            <div className="mt-6 grid grid-cols-2 sm:grid-cols-4 gap-4">
+              {historyDetail.scores.map((s, idx) => (
                 <div
-                  className={`flex items-center gap-2 px-4 py-3 rounded-2xl border-2 flex-1 ${
+                  key={idx}
+                  className={`p-4 rounded-2xl border-2 ${
                     isDarkMode
                       ? "bg-slate-800 border-slate-700"
                       : "bg-slate-50 border-slate-200"
                   }`}
                 >
-                  <Search size={16} className={isDarkMode ? "text-slate-300" : "text-slate-500"} />
-                  <input
-                    value={historyQuery}
-                    onChange={(e) => setHistoryQuery(e.target.value)}
-                    placeholder="Procurar por jogador..."
-                    className={`w-full bg-transparent outline-none font-black text-[12px] uppercase ${
-                      isDarkMode ? "text-white placeholder:text-slate-400" : "text-slate-900 placeholder:text-slate-400"
+                  <div className="text-[10px] opacity-60 font-black uppercase">
+                    {s.name}
+                  </div>
+                  <div
+                    className={`text-2xl font-black ${
+                      s.score > 0
+                        ? "text-emerald-500"
+                        : s.score < 0
+                        ? "text-rose-500"
+                        : "opacity-40"
                     }`}
-                  />
-                </div>
-
-                <select
-                  value={historySort}
-                  onChange={(e) => setHistorySort(e.target.value)}
-                  className={`px-4 py-3 rounded-2xl border-2 font-black text-[12px] uppercase outline-none ${
-                    isDarkMode
-                      ? "bg-slate-800 border-slate-700 text-white"
-                      : "bg-white border-slate-200 text-slate-900"
-                  }`}
-                >
-                  <option value="date_desc">Data (mais recente)</option>
-                  <option value="date_asc">Data (mais antiga)</option>
-                  <option value="winner_desc">Vencedor (maior)</option>
-                  <option value="winner_asc">Vencedor (menor)</option>
-                </select>
-              </div>
-
-              {!historyDetail && (
-                <div className="space-y-4">
-                  {filteredHistory.length === 0 && (
-                    <div
-                      className={`p-6 rounded-2xl border-2 text-center font-black uppercase text-[11px] ${
-                        isDarkMode
-                          ? "bg-slate-800 border-slate-700 text-slate-300"
-                          : "bg-slate-50 border-slate-200 text-slate-500"
-                      }`}
-                    >
-                      Sem resultados.
-                    </div>
-                  )}
-
-                  {filteredHistory.map((h) => (
-                    <div
-                      key={h.id}
-                      className={`p-5 border-2 rounded-2xl ${
-                        isDarkMode
-                          ? "bg-slate-800 border-slate-700"
-                          : "bg-slate-50 border-slate-200"
-                      }`}
-                    >
-                      <div className="flex items-start justify-between gap-3">
-                        <div>
-                          <div className="text-[10px] opacity-50 font-black uppercase tracking-wider">
-                            {h.date}
-                          </div>
-                          <div className="text-[11px] font-black uppercase mt-1 opacity-80">
-                            {h.players?.join(" • ")}
-                          </div>
-                        </div>
-
-                        <div className="flex gap-2">
-                          <button
-                            onClick={() => setHistoryDetail(h)}
-                            className={`px-4 py-2 rounded-xl font-black text-[10px] uppercase border-2 transition-all ${
-                              isDarkMode
-                                ? "bg-slate-900 border-slate-700 hover:bg-slate-700"
-                                : "bg-white border-slate-200 hover:bg-slate-100"
-                            }`}
-                            title="Ver detalhes deste jogo"
-                          >
-                            Detalhes
-                          </button>
-
-                          <button
-                            onClick={() => repeatHistoryPlayers(h)}
-                            className={`px-4 py-2 rounded-xl font-black text-[10px] uppercase border-2 transition-all flex items-center gap-2 ${
-                              isDarkMode
-                                ? "bg-slate-900 border-slate-700 hover:bg-slate-700"
-                                : "bg-white border-slate-200 hover:bg-slate-100"
-                            }`}
-                            title="Carregar os mesmos jogadores"
-                          >
-                            <RotateCw size={14} /> Repetir
-                          </button>
-
-                          <button
-                            onClick={() => deleteHistoryItem(h.id)}
-                            className="px-4 py-2 rounded-xl font-black text-[10px] uppercase bg-rose-500 text-white hover:bg-rose-600 transition-all flex items-center gap-2"
-                            title="Apagar este jogo do histórico"
-                          >
-                            <Trash2 size={14} /> Apagar
-                          </button>
-                        </div>
-                      </div>
-
-                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mt-4">
-                        {h.scores.map((s, idx) => (
-                          <div key={idx} className="flex flex-col">
-                            <span className="text-[10px] opacity-60 font-black uppercase mb-1">
-                              {s.name}
-                            </span>
-                            <span
-                              className={`text-2xl font-black ${
-                                s.score > 0
-                                  ? "text-emerald-500"
-                                  : s.score < 0
-                                  ? "text-rose-500"
-                                  : "opacity-40"
-                              }`}
-                            >
-                              {s.score > 0 ? "+" : ""}
-                              {s.score}
-                            </span>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-
-              {historyDetail && (
-                <div>
-                  <div className="flex items-center justify-between mb-4">
-                    <div>
-                      <div className="text-[10px] opacity-50 font-black uppercase tracking-wider">
-                        {historyDetail.date}
-                      </div>
-                      <div className="text-[12px] font-black uppercase mt-1">
-                        Detalhes do jogo
-                      </div>
-                    </div>
-
-                    <div className="flex gap-2">
-                      <button
-                        onClick={() => repeatHistoryPlayers(historyDetail)}
-                        className={`px-4 py-2 rounded-xl font-black text-[10px] uppercase border-2 transition-all flex items-center gap-2 ${
-                          isDarkMode
-                            ? "bg-slate-800 border-slate-700 hover:bg-slate-700"
-                            : "bg-slate-100 border-slate-200 hover:bg-slate-200"
-                        }`}
-                        title="Carregar os mesmos jogadores"
-                      >
-                        <RotateCw size={14} /> Repetir
-                      </button>
-
-                      <button
-                        onClick={() => setHistoryDetail(null)}
-                        className={`px-4 py-2 rounded-xl font-black text-[10px] uppercase border-2 transition-all ${
-                          isDarkMode
-                            ? "bg-slate-800 border-slate-700 hover:bg-slate-700"
-                            : "bg-slate-100 border-slate-200 hover:bg-slate-200"
-                        }`}
-                      >
-                        Voltar
-                      </button>
-                    </div>
-                  </div>
-
-                  <div className="overflow-x-auto">
-                    <table className="w-full border-collapse table-fixed">
-                      <colgroup>
-                        <col style={{ width: "22%" }} />
-                        <col style={{ width: "19.5%" }} />
-                        <col style={{ width: "19.5%" }} />
-                        <col style={{ width: "19.5%" }} />
-                        <col style={{ width: "19.5%" }} />
-                      </colgroup>
-                      <thead>
-                        <tr>
-                          <th
-                            className={`p-3 text-left border-b-2 ${
-                              isDarkMode
-                                ? "border-slate-700 text-slate-200"
-                                : "border-slate-200 text-slate-700"
-                            }`}
-                          >
-                            Ronda
-                          </th>
-                          {historyDetail.players.map((p, i) => (
-                            <th
-                              key={i}
-                              className={`p-3 text-center border-b-2 font-black uppercase text-[11px] ${
-                                isDarkMode
-                                  ? "border-slate-700 text-white"
-                                  : "border-slate-200 text-slate-900"
-                              }`}
-                            >
-                              {p}
-                            </th>
-                          ))}
-                        </tr>
-                      </thead>
-                      <tbody
-                        className={`divide-y ${
-                          isDarkMode ? "divide-slate-800" : "divide-slate-200"
-                        }`}
-                      >
-                        {rounds.map((r) => {
-                          const label =
-                            r.type === "festa"
-                              ? getFestaLabelFor(historyDetail.players, r.id)
-                              : r.name;
-
-                          return (
-                            <tr key={r.id}>
-                              <td
-                                className={`p-3 font-black uppercase text-[11px] ${
-                                  isDarkMode ? "text-slate-200" : "text-slate-700"
-                                }`}
-                              >
-                                {label}
-                              </td>
-                              {[0, 1, 2, 3].map((pIdx) => {
-                                const val =
-                                  historyDetail.table?.[r.id]?.[`p${pIdx}`] ?? "";
-                                const pts = calculatePoints(r.id, pIdx, {
-                                  scores: historyDetail.table,
-                                  festaModes: historyDetail.festaModes,
-                                });
-
-                                return (
-                                  <td key={pIdx} className="p-3 text-center">
-                                    <div className="font-black text-lg">
-                                      {val === "" ? "—" : val}
-                                    </div>
-                                    <div
-                                      className={`text-[10px] font-black ${
-                                        pts > 0
-                                          ? "text-emerald-500"
-                                          : pts < 0
-                                          ? "text-rose-500"
-                                          : "opacity-40"
-                                      }`}
-                                    >
-                                      {pts > 0 ? "+" : ""}
-                                      {pts}
-                                    </div>
-                                  </td>
-                                );
-                              })}
-                            </tr>
-                          );
-                        })}
-                      </tbody>
-                    </table>
-                  </div>
-
-                  <div className="mt-6 grid grid-cols-2 sm:grid-cols-4 gap-4">
-                    {historyDetail.scores.map((s, idx) => (
-                      <div
-                        key={idx}
-                        className={`p-4 rounded-2xl border-2 ${
-                          isDarkMode
-                            ? "bg-slate-800 border-slate-700"
-                            : "bg-slate-50 border-slate-200"
-                        }`}
-                      >
-                        <div className="text-[10px] opacity-60 font-black uppercase">
-                          {s.name}
-                        </div>
-                        <div
-                          className={`text-2xl font-black ${
-                            s.score > 0
-                              ? "text-emerald-500"
-                              : s.score < 0
-                              ? "text-rose-500"
-                              : "opacity-40"
-                          }`}
-                        >
-                          {s.score > 0 ? "+" : ""}
-                          {s.score}
-                        </div>
-                      </div>
-                    ))}
+                  >
+                    {s.score > 0 ? "+" : ""}
+                    {s.score}
                   </div>
                 </div>
-              )}
+              ))}
             </div>
           </div>
         )}
-
-        {toast && (
-          <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-[999]">
-            <div
-              className={`px-5 py-3 rounded-2xl font-black text-[11px] uppercase shadow-2xl ${
-                isDarkMode
-                  ? "bg-slate-800 text-slate-100 border border-slate-700"
-                  : "bg-white text-slate-900 border border-slate-200"
-              }`}
-            >
-              {toast}
-            </div>
-          </div>
-        )}
-      </main>
+      </div>
     </div>
   );
 }
