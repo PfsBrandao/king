@@ -11,8 +11,8 @@
   "dependencies": {
     "next": "14.2.3",
     "react": "18.2.0",
-    "react-dom": "18.2.0"
-    "lucide-react": "^0.441.0"
+    "react-dom": "18.2.0",
+    "lucide-react": "latest"
   },
   "devDependencies": {
     "tailwindcss": "3.4.4",
